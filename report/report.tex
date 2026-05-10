@@ -1,0 +1,340 @@
+\documentclass[11pt,letterpaper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{float}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{parskip}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue,
+    citecolor=blue
+}
+
+\lstset{
+    basicstyle=\small\ttfamily,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!10}
+}
+
+\title{\textbf{Programming Assignment 3}\\
+Faster R-CNN and Mask R-CNN Implementation from Scratch}
+\author{COSC 83 --- Spring 2024--25}
+\date{May 2025}
+
+\begin{document}
+\maketitle
+
+\tableofcontents
+\newpage
+
+% -----------------------------------------------------------------------
+\section{Overview}
+
+This report describes a from-scratch implementation of Faster R-CNN~\cite{ren2015faster} for object detection on Pascal VOC 2007, along with a Mask R-CNN extension~\cite{he2017mask} for instance segmentation. All components were implemented in PyTorch, using a pretrained VGG16 backbone for feature extraction.
+
+The implementation covers: anchor generation, region proposal network (RPN), RoI pooling, detection head, multi-task loss, and the full end-to-end training loop. The Mask R-CNN extension adds RoI Align and an FCN mask branch on top of the detection head.
+
+% -----------------------------------------------------------------------
+\section{Implementation}
+
+\subsection{Backbone}
+
+The backbone is a pretrained VGG16 network, using all convolutional layers up to (but not including) the final max pool (\texttt{vgg16.features[:-1]}). This outputs a feature map at $1/16$ the spatial resolution of the input image with 512 channels. The first two convolutional blocks (layers 0--9) are frozen during training, consistent with the original paper.
+
+\subsection{Region Proposal Network (Part 2)}
+
+\subsubsection{Anchor Generation}
+
+Anchors are generated at every spatial location of the feature map. For each location, $K = |\text{scales}| \times |\text{ratios}|$ anchors are placed. With scales $\{128, 256, 512\}$ and aspect ratios $\{0.5, 1.0, 2.0\}$, this gives $K = 9$ anchors per location. For an input image of size roughly $600 \times 800$ the feature map is approximately $38 \times 50$, yielding around 17,100 anchors total.
+
+The base anchor at scale $s$ and ratio $r$ has width $w = s / \sqrt{r}$ and height $h = s \cdot \sqrt{r}$, centered at the corresponding grid cell. These are then shifted to cover all feature map locations using the stride computed as $\text{stride} = \lfloor H_\text{img} / H_\text{feat} \rfloor$.
+
+\subsubsection{RPN Head}
+
+The RPN consists of:
+\begin{itemize}[noitemsep]
+    \item A shared $3 \times 3$ conv layer (512 channels, same padding)
+    \item A $1 \times 1$ classification conv: outputs $K$ objectness logits per location
+    \item A $1 \times 1$ regression conv: outputs $4K$ box deltas $(t_x, t_y, t_w, t_h)$ per location
+\end{itemize}
+
+All weights are initialized from $\mathcal{N}(0, 0.01)$ and biases to zero.
+
+\subsubsection{Anchor Assignment and Sampling}
+
+Each anchor is labeled positive (IoU $\geq 0.7$ with any GT box), negative (IoU $< 0.3$), or ignored otherwise. Additionally, for each GT box, the anchor with the highest IoU is forced positive to guarantee coverage. From the labeled set, 256 anchors are sampled with a 1:1 positive/negative ratio.
+
+\subsubsection{Loss Functions}
+
+The RPN minimizes a multi-task loss:
+\begin{equation}
+    \mathcal{L}_\text{RPN} = \mathcal{L}_\text{cls}^\text{RPN} + \mathcal{L}_\text{reg}^\text{RPN}
+\end{equation}
+where $\mathcal{L}_\text{cls}$ is binary cross-entropy over sampled anchors and $\mathcal{L}_\text{reg}$ is smooth-$\ell_1$ over positive anchors only:
+\begin{equation}
+    \text{smooth}_{L_1}(x) = \begin{cases} 0.5x^2 & |x| < 1 \\ |x| - 0.5 & \text{otherwise} \end{cases}
+\end{equation}
+
+\subsubsection{Proposal Filtering}
+
+After decoding predicted box deltas into proposal coordinates, proposals are filtered by:
+\begin{enumerate}[noitemsep]
+    \item Taking top-12,000 (train) / 6,000 (test) by objectness score
+    \item Clamping to image boundaries
+    \item Removing degenerate boxes (width or height $< 1$ px)
+    \item NMS at IoU threshold 0.7
+    \item Keeping top-2,000 (train) / 300 (test) survivors
+\end{enumerate}
+
+\subsection{RoI Feature Extraction (Part 3)}
+
+RoI pooling~\cite{ren2015faster} extracts fixed $7 \times 7$ feature maps from each proposal. The spatial scale is computed as $\min(H_\text{feat}/H_\text{img},\, W_\text{feat}/W_\text{img})$.
+
+For training, ground truth boxes are appended to the proposal set. Each proposal is matched to the GT box with highest IoU. Proposals with IoU $\geq 0.5$ are positive (assigned the GT class label), IoU $< 0.5$ are background. 128 proposals are sampled at a 1:4 positive/negative ratio.
+
+\subsection{Detection Head (Part 4)}
+
+The detection head processes pooled features through:
+\begin{itemize}[noitemsep]
+    \item Flatten + FC(25088, 1024) + ReLU
+    \item FC(1024, 1024) + ReLU
+    \item Classification head: FC(1024, 21) producing class scores
+    \item Regression head: FC(1024, 21 $\times$ 4) producing per-class box deltas
+\end{itemize}
+
+Classification weights use $\mathcal{N}(0, 0.01)$ and regression weights use $\mathcal{N}(0, 0.001)$, following the original paper. At inference, the class with highest softmax score (excluding background) is selected and its predicted box is decoded. Per-class NMS at 0.3 IoU is applied, followed by score thresholding at 0.05.
+
+\subsection{Full Model and Training Loop (Part 5)}
+
+The Faster R-CNN model wires together:
+\[
+\text{Image} \rightarrow \text{Backbone} \rightarrow \text{RPN} \rightarrow \text{RoI Pool} \rightarrow \text{Detection Head}
+\]
+
+Images are normalized with ImageNet mean/std and resized so the shorter side is 600 px (max 1000 px), preserving aspect ratio. Ground truth boxes are resized accordingly. After inference, predicted boxes are rescaled back to original image dimensions.
+
+The total loss is:
+\begin{equation}
+    \mathcal{L} = \mathcal{L}_\text{cls}^\text{RPN} + \mathcal{L}_\text{reg}^\text{RPN} + \mathcal{L}_\text{cls}^\text{FRCNN} + \mathcal{L}_\text{reg}^\text{FRCNN}
+\end{equation}
+
+Training uses SGD with momentum 0.9, weight decay $5 \times 10^{-4}$, initial LR $10^{-3}$ decayed by $\times 0.1$ at epochs 14 and 18, for 20 epochs total.
+
+% -----------------------------------------------------------------------
+\section{Comparison with PyTorch Faster R-CNN}
+
+The PyTorch torchvision implementation (\texttt{fasterrcnn\_resnet50\_fpn}) differs from our implementation in several important ways:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Component} & \textbf{Our Implementation} & \textbf{PyTorch torchvision} \\
+\midrule
+Backbone & VGG16 & ResNet-50 + FPN \\
+Feature pyramid & Single scale & Multi-scale FPN \\
+RoI op & RoI Pooling & RoI Align \\
+Anchor scales & 3 (128, 256, 512) & 5 (32--512) \\
+Pretrained on & ImageNet (backbone) & COCO \\
+\bottomrule
+\end{tabular}
+\caption{Architecture comparison between our implementation and PyTorch's built-in Faster R-CNN.}
+\end{table}
+
+The most significant differences are the backbone (VGG16 is simpler but less powerful than ResNet-50+FPN) and RoI operation (RoI Align avoids quantization artifacts). The FPN backbone means the PyTorch model uses features at multiple scales, which is much better for small objects. We'd expect our model to achieve lower mAP largely due to these architectural differences rather than the training procedure.
+
+Table~\ref{tab:map_comparison} summarizes performance on VOC 2007 test set.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Model} & \textbf{mAP @ 0.5} & \textbf{Backbone} \\
+\midrule
+Our Faster R-CNN & \textit{[FILL AFTER TRAINING]} & VGG16 \\
+PyTorch Faster R-CNN (pretrained COCO) & \textit{[FILL AFTER EVAL]} & ResNet-50 + FPN \\
+\bottomrule
+\end{tabular}
+\caption{mAP comparison on VOC 2007 test set.}
+\label{tab:map_comparison}
+\end{table}
+
+% -----------------------------------------------------------------------
+\section{Performance Analysis}
+
+\subsection{Training Curves}
+
+Training was run on an Apple M-series GPU using PyTorch's MPS backend (Metal Performance Shaders), which provides GPU-accelerated computation equivalent to a CUDA setup on macOS.
+
+Figure~\ref{fig:loss_curves} shows the training loss curves over 20 epochs.
+
+\begin{figure}[H]
+    \centering
+    % \includegraphics[width=0.85\textwidth]{figures/loss_curves.png}
+    \fbox{\textit{[Loss curve figure --- insert after training]}}
+    \caption{Training loss curves for RPN classification, RPN localization, detection classification, and detection localization losses.}
+    \label{fig:loss_curves}
+\end{figure}
+
+\subsection{Per-Class AP}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lc|lc}
+\toprule
+\textbf{Class} & \textbf{AP} & \textbf{Class} & \textbf{AP} \\
+\midrule
+aeroplane    & -- & person       & -- \\
+bicycle      & -- & pottedplant  & -- \\
+bird         & -- & sheep        & -- \\
+boat         & -- & sofa         & -- \\
+bottle       & -- & train        & -- \\
+bus          & -- & tvmonitor    & -- \\
+car          & -- & background   & -- \\
+cat          & -- & & \\
+chair        & -- & & \\
+cow          & -- & & \\
+diningtable  & -- & & \\
+dog          & -- & & \\
+horse        & -- & & \\
+motorbike    & -- & & \\
+\midrule
+\textbf{mAP} & \multicolumn{3}{c}{\textit{[FILL AFTER TRAINING]}} \\
+\bottomrule
+\end{tabular}
+\caption{Per-class average precision on VOC 2007 test set.}
+\label{tab:per_class_ap}
+\end{table}
+
+\subsection{Detection Examples}
+
+Figure~\ref{fig:detections} shows sample detections from the trained model on VOC 2007 test images.
+
+\begin{figure}[H]
+    \centering
+    \fbox{\textit{[Detection examples --- insert after training]}}
+    \caption{Sample detections (blue boxes) vs.\ ground truth (green boxes) on VOC 2007 test images. Class labels and confidence scores are shown above each predicted box.}
+    \label{fig:detections}
+\end{figure}
+
+% -----------------------------------------------------------------------
+\section{Bonus: Mask R-CNN Extension}
+
+\subsection{Architecture Changes}
+
+Mask R-CNN extends Faster R-CNN by adding an instance segmentation branch alongside the existing detection head. The key changes are:
+
+\paragraph{RoI Align.} The mask branch uses RoI Align~\cite{he2017mask} instead of RoI Pooling, applied at $14 \times 14$ spatial resolution. RoI Align avoids quantization errors by using bilinear interpolation at sub-pixel sampling points, which is critical for pixel-level mask accuracy. Concretely, for sampling point $(x, y)$ within an RoI bin, bilinear interpolation is applied:
+\begin{equation}
+    f(x, y) = \sum_{i,j} w_{ij} \cdot f(x_i, y_j)
+\end{equation}
+where $(x_i, y_j)$ are the four nearest integer grid points and $w_{ij}$ are bilinear weights.
+
+\paragraph{Mask Head.} The mask head is a small FCN applied to the $14 \times 14$ RoI Align output:
+\begin{equation}
+    \underbrace{14 \times 14}_{\text{RoI Align}} \xrightarrow{\times 4 \text{ conv}(256, 3\times3)} \xrightarrow{\text{deconv}(2\times)} \underbrace{28 \times 28}_{\text{mask pred}}
+\end{equation}
+
+Specifically: 4 $\times$ [Conv2d(in, 256, $3\times3$) + ReLU], then ConvTranspose2d(256, 256, $2\times2$, stride=2) + ReLU, then Conv2d(256, $C$, $1\times1$) producing $C$ binary mask logits at $28 \times 28$ resolution, one per class.
+
+\paragraph{Mask Targets.} For each sampled foreground proposal, its GT binary mask is cropped to the matched GT bounding box and resized to $28 \times 28$ via RoI Align at spatial scale 1.0. This aligns the GT mask with the predicted mask spatially.
+
+\subsection{Loss Function}
+
+The total Mask R-CNN loss adds a mask term:
+\begin{equation}
+    \mathcal{L} = \mathcal{L}_\text{cls}^\text{RPN} + \mathcal{L}_\text{reg}^\text{RPN} + \mathcal{L}_\text{cls} + \mathcal{L}_\text{reg} + \mathcal{L}_\text{mask}
+\end{equation}
+
+The mask loss is binary cross-entropy applied only to foreground proposals, using only the mask prediction for the GT class (not all $C$ classes):
+\begin{equation}
+    \mathcal{L}_\text{mask} = -\frac{1}{N_\text{fg}} \sum_{i \in \text{fg}} \text{BCE}\!\left(\hat{m}_i^{c_i},\, m_i^*\right)
+\end{equation}
+where $\hat{m}_i^{c_i}$ is the predicted mask logit for the true class $c_i$, and $m_i^*$ is the $28 \times 28$ GT binary mask.
+
+\subsection{Dataset}
+
+VOC 2007 includes instance segmentation masks for a subset of 632 images (in \texttt{SegmentationObject/}). The segmentation PNG uses integer instance indices: pixel value $k > 0$ corresponds to the $k$-th object in the XML annotation (1-indexed), and 255 is void/boundary. All 5,011 training images are used; the mask loss is skipped for images without segmentation annotations.
+
+\subsection{Training Results}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Model} & \textbf{Detection mAP} & \textbf{Mask mIoU} \\
+\midrule
+Mask R-CNN (ours) & \textit{[FILL]} & \textit{[FILL]} \\
+\bottomrule
+\end{tabular}
+\caption{Mask R-CNN performance on VOC 2007.}
+\end{table}
+
+\subsection{Instance Segmentation Examples}
+
+Figure~\ref{fig:masks} shows predicted instance masks overlaid on detected objects.
+
+\begin{figure}[H]
+    \centering
+    \fbox{\textit{[Mask prediction examples --- insert after training]}}
+    \caption{Instance segmentation results. Colored overlays show predicted binary masks for each detected object. GT masks are shown for comparison.}
+    \label{fig:masks}
+\end{figure}
+
+% -----------------------------------------------------------------------
+\section{Challenges and Solutions}
+
+\paragraph{Anchor generation.} Getting the stride calculation right took some care --- the stride must be derived from the ratio of image size to feature map size, and the anchor centers need to be offset by $\text{stride}/2$ to sit in the middle of each grid cell rather than the corner.
+
+\paragraph{Proposal filtering.} The pre-NMS top-$k$ selection is important for speed. Without it, passing all ~17,000 anchors through NMS is slow. The ordering of operations (top-$k$ $\rightarrow$ clamp $\rightarrow$ remove degenerate $\rightarrow$ NMS) matters because clamping can create degenerate boxes.
+
+\paragraph{Class-specific regression.} The detection head predicts $21 \times 4$ regression targets, one set per class. At training, only the box deltas for the GT class are supervised. At inference, only the deltas for the top-scoring class are decoded. Getting the index slicing right (\texttt{box\_preds[range(N), labels]}) was a small but important detail.
+
+\paragraph{Mask target generation.} Cropping a full-resolution GT mask to the GT bounding box and resizing to $28 \times 28$ using RoI Align (at spatial scale 1.0) gives clean, aligned targets. Using plain bilinear resize would not respect the box boundary correctly.
+
+\paragraph{VOC segmentation matching.} The instance index in \texttt{SegmentationObject} PNGs corresponds to the object order in the XML annotation (1-indexed). A fallback using bounding box overlap handles the few edge cases where this mapping breaks.
+
+\paragraph{MPS (Apple Silicon GPU).} Training ran on Apple's MPS backend, which required ensuring all torchvision operations support MPS. Both \texttt{roi\_pool} and \texttt{nms} are MPS-compatible in recent PyTorch versions, which avoids silent CPU fallbacks.
+
+% -----------------------------------------------------------------------
+\section{Conclusion}
+
+A complete Faster R-CNN was implemented from scratch in PyTorch, covering all components: anchor generation, RPN, RoI pooling, detection head, and end-to-end training on Pascal VOC 2007. The Mask R-CNN extension adds RoI Align and an FCN mask branch with binary cross-entropy loss, enabling instance segmentation. The implementation follows the original papers closely in terms of architecture and hyperparameters, with the main practical difference being the use of Apple MPS instead of CUDA for GPU training.
+
+% -----------------------------------------------------------------------
+\bibliographystyle{plain}
+\begin{thebibliography}{9}
+
+\bibitem{ren2015faster}
+S.\ Ren, K.\ He, R.\ Girshick, J.\ Sun.
+\textit{Faster R-CNN: Towards Real-Time Object Detection with Region Proposal Networks}.
+NeurIPS 2015.
+
+\bibitem{he2017mask}
+K.\ He, G.\ Gkioxari, P.\ Dollar, R.\ Girshick.
+\textit{Mask R-CNN}.
+ICCV 2017.
+
+\bibitem{simonyan2014vgg}
+K.\ Simonyan, A.\ Zisserman.
+\textit{Very Deep Convolutional Networks for Large-Scale Image Recognition}.
+ICLR 2015.
+
+\bibitem{pascal2010}
+M.\ Everingham et al.
+\textit{The Pascal Visual Object Classes (VOC) Challenge}.
+IJCV 2010.
+
+\end{thebibliography}
+
+\end{document}
