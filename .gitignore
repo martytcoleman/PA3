@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+checkpoints/
+*.pth
+samples/
+*.tar
+VOC2007/
+VOC2007-test/
