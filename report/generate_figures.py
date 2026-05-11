@@ -53,6 +53,43 @@ os.makedirs('figures', exist_ok=True)
 plt.savefig('figures/loss_curves.png', dpi=150, bbox_inches='tight')
 print('saved figures/loss_curves.png')
 
+# mask r-cnn loss curves
+mask_rpn_cls = [0.1853, 0.1310, 0.1132, 0.1008, 0.0921, 0.0844, 0.0784, 0.0724,
+                0.0670, 0.0613, 0.0585, 0.0547, 0.0523, 0.0495, 0.0363, 0.0340,
+                0.0323, 0.0313, 0.0306, 0.0302]
+
+mask_frcnn_cls = [0.4380, 0.2868, 0.2479, 0.2199, 0.1993, 0.1871, 0.1744, 0.1653,
+                  0.1547, 0.1499, 0.1423, 0.1378, 0.1354, 0.1300, 0.0996, 0.0949,
+                  0.0924, 0.0909, 0.0891, 0.0877]
+
+mask_loss = [0.0260, 0.0184, 0.0169, 0.0155, 0.0146, 0.0142, 0.0139, 0.0136,
+             0.0131, 0.0128, 0.0126, 0.0121, 0.0124, 0.0121, 0.0114, 0.0113,
+             0.0111, 0.0112, 0.0110, 0.0109]
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+axes[0].plot(epochs, mask_rpn_cls, 'b-o', markersize=4, label='RPN cls loss')
+axes[0].plot(epochs, mask_frcnn_cls, 'g-s', markersize=4, label='FRCNN cls loss')
+axes[0].axvline(x=14, color='gray', linestyle='--', alpha=0.5, label='LR decay')
+axes[0].axvline(x=18, color='gray', linestyle='--', alpha=0.5)
+axes[0].set_xlabel('Epoch')
+axes[0].set_ylabel('Loss')
+axes[0].set_title('Mask R-CNN Classification Losses')
+axes[0].legend()
+axes[0].grid(True, alpha=0.3)
+
+axes[1].plot(epochs, mask_loss, 'r-o', markersize=4, label='Mask loss')
+axes[1].axvline(x=14, color='gray', linestyle='--', alpha=0.5, label='LR decay')
+axes[1].axvline(x=18, color='gray', linestyle='--', alpha=0.5)
+axes[1].set_xlabel('Epoch')
+axes[1].set_ylabel('Loss')
+axes[1].set_title('Mask R-CNN Mask Loss')
+axes[1].legend()
+axes[1].grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.savefig('figures/mask_loss_curves.png', dpi=150, bbox_inches='tight')
+print('saved figures/mask_loss_curves.png')
+
 # per-class ap bar chart
 classes = ['aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car',
            'cat', 'chair', 'cow', 'diningtable', 'dog', 'horse', 'motorbike',

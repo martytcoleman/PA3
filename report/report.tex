@@ -274,17 +274,29 @@ VOC 2007 includes instance segmentation masks for a subset of 632 images (in \te
 
 \subsection{Training Results}
 
+Mask R-CNN was trained with the same hyperparameters as Faster R-CNN: 20 epochs, SGD with lr=$10^{-3}$, momentum 0.9, weight decay $5\times10^{-4}$, LR decay at epochs 14 and 18. The mask loss started at 0.0260 and converged to 0.0109 at epoch 19.
+
 \begin{table}[H]
 \centering
 \begin{tabular}{lcc}
 \toprule
-\textbf{Model} & \textbf{Detection mAP} & \textbf{Mask mIoU} \\
+\textbf{Model} & \textbf{Detection mAP} & \textbf{Backbone} \\
 \midrule
-Mask R-CNN (ours) & \textit{[FILL]} & \textit{[FILL]} \\
+Faster R-CNN (ours)  & 59.34 & VGG16 \\
+Mask R-CNN (ours)    & 59.62 & VGG16 \\
 \bottomrule
 \end{tabular}
-\caption{Mask R-CNN performance on VOC 2007.}
+\caption{Detection mAP on VOC 2007 test set. Mask R-CNN matches Faster R-CNN on detection, as expected since the detection branch is unchanged; the mask branch adds instance segmentation with negligible impact on box accuracy.}
 \end{table}
+
+\subsection{Training Curves}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{figures/mask_loss_curves.png}
+    \caption{Mask R-CNN training loss curves. Left: classification losses for RPN and detection head. Right: mask branch BCE loss, converging from 0.0260 to 0.0109 over 20 epochs.}
+    \label{fig:mask_loss_curves}
+\end{figure}
 
 \subsection{Instance Segmentation Examples}
 
@@ -310,12 +322,12 @@ Figure~\ref{fig:masks} shows predicted instance masks overlaid on detected objec
 
 \paragraph{VOC segmentation matching.} The instance index in \texttt{SegmentationObject} PNGs corresponds to the object order in the XML annotation (1-indexed). A fallback using bounding box overlap handles the few edge cases where this mapping breaks.
 
-\paragraph{MPS (Apple Silicon GPU).} Training ran on Apple's MPS backend, which required ensuring all torchvision operations support MPS. Both \texttt{roi\_pool} and \texttt{nms} are MPS-compatible in recent PyTorch versions, which avoids silent CPU fallbacks.
+\paragraph{CUDA on Colab.} Both models were trained on a Google Colab Tesla T4 GPU. The codebase also supports Apple MPS as a fallback for local development, which required verifying that \texttt{roi\_pool} and \texttt{nms} are MPS-compatible in recent PyTorch versions.
 
 % -----------------------------------------------------------------------
 \section{Conclusion}
 
-A complete Faster R-CNN was implemented from scratch in PyTorch, covering all components: anchor generation, RPN, RoI pooling, detection head, and end-to-end training on Pascal VOC 2007. The Mask R-CNN extension adds RoI Align and an FCN mask branch with binary cross-entropy loss, enabling instance segmentation. The implementation follows the original papers closely in terms of architecture and hyperparameters, with the main practical difference being the use of Apple MPS instead of CUDA for GPU training.
+A complete Faster R-CNN was implemented from scratch in PyTorch, covering all components: anchor generation, RPN, RoI pooling, detection head, and end-to-end training on Pascal VOC 2007. The Mask R-CNN extension adds RoI Align and an FCN mask branch with binary cross-entropy loss, enabling instance segmentation. The implementation follows the original papers closely in terms of architecture and hyperparameters. Both models were trained on a Tesla T4 GPU via Google Colab. Faster R-CNN achieves 59.34\% mAP and Mask R-CNN achieves 59.62\% mAP on VOC 2007 test, with the Mask R-CNN additionally producing instance segmentation masks per detected object.
 
 % -----------------------------------------------------------------------
 \bibliographystyle{plain}
