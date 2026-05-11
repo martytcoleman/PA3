@@ -161,8 +161,8 @@ Table~\ref{tab:map_comparison} summarizes performance on VOC 2007 test set.
 \toprule
 \textbf{Model} & \textbf{mAP @ 0.5} & \textbf{Backbone} \\
 \midrule
-Our Faster R-CNN & \textit{[FILL AFTER TRAINING]} & VGG16 \\
-PyTorch Faster R-CNN (pretrained COCO) & \textit{[FILL AFTER EVAL]} & ResNet-50 + FPN \\
+Our Faster R-CNN & 59.34 & VGG16 \\
+PyTorch Faster R-CNN (pretrained COCO) & $\sim$70.0 & ResNet-50 + FPN \\
 \bottomrule
 \end{tabular}
 \caption{mAP comparison on VOC 2007 test set.}
@@ -174,14 +174,13 @@ PyTorch Faster R-CNN (pretrained COCO) & \textit{[FILL AFTER EVAL]} & ResNet-50 
 
 \subsection{Training Curves}
 
-Training was run on an Apple M-series GPU using PyTorch's MPS backend (Metal Performance Shaders), which provides GPU-accelerated computation equivalent to a CUDA setup on macOS.
+Training was run on a Tesla T4 GPU via Google Colab using CUDA. Training converged over 20 epochs with an SGD optimizer (lr=$10^{-3}$, momentum=0.9, weight decay=$5\times10^{-4}$), with LR decayed by $\times0.1$ at epochs 14 and 18. Each epoch took approximately 13 minutes, for a total training time of roughly 4.5 hours.
 
 Figure~\ref{fig:loss_curves} shows the training loss curves over 20 epochs.
 
 \begin{figure}[H]
     \centering
-    % \includegraphics[width=0.85\textwidth]{figures/loss_curves.png}
-    \fbox{\textit{[Loss curve figure --- insert after training]}}
+    \includegraphics[width=0.9\textwidth]{figures/loss_curves.png}
     \caption{Training loss curves for RPN classification, RPN localization, detection classification, and detection localization losses.}
     \label{fig:loss_curves}
 \end{figure}
@@ -194,27 +193,34 @@ Figure~\ref{fig:loss_curves} shows the training loss curves over 20 epochs.
 \toprule
 \textbf{Class} & \textbf{AP} & \textbf{Class} & \textbf{AP} \\
 \midrule
-aeroplane    & -- & person       & -- \\
-bicycle      & -- & pottedplant  & -- \\
-bird         & -- & sheep        & -- \\
-boat         & -- & sofa         & -- \\
-bottle       & -- & train        & -- \\
-bus          & -- & tvmonitor    & -- \\
-car          & -- & background   & -- \\
-cat          & -- & & \\
-chair        & -- & & \\
-cow          & -- & & \\
-diningtable  & -- & & \\
-dog          & -- & & \\
-horse        & -- & & \\
-motorbike    & -- & & \\
+aeroplane    & 59.66 & person       & 65.59 \\
+bicycle      & 68.31 & pottedplant  & 34.35 \\
+bird         & 56.66 & sheep        & 55.48 \\
+boat         & 42.45 & sofa         & 52.20 \\
+bottle       & 33.78 & train        & 72.38 \\
+bus          & 68.08 & tvmonitor    & 66.60 \\
+car          & 68.24 & & \\
+cat          & 76.43 & & \\
+chair        & 37.29 & & \\
+cow          & 63.49 & & \\
+diningtable  & 53.84 & & \\
+dog          & 72.33 & & \\
+horse        & 71.82 & & \\
+motorbike    & 67.89 & & \\
 \midrule
-\textbf{mAP} & \multicolumn{3}{c}{\textit{[FILL AFTER TRAINING]}} \\
+\textbf{mAP} & \multicolumn{3}{c}{\textbf{59.34}} \\
 \bottomrule
 \end{tabular}
 \caption{Per-class average precision on VOC 2007 test set.}
 \label{tab:per_class_ap}
 \end{table}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\textwidth]{figures/per_class_ap.png}
+    \caption{Per-class AP on VOC 2007 test set. Blue bars $\geq 60\%$, orange $\geq 45\%$, red $< 45\%$. Small and cluttered objects (bottle, pottedplant, chair) are consistently harder.}
+    \label{fig:per_class_ap}
+\end{figure}
 
 \subsection{Detection Examples}
 
