@@ -1,141 +1,77 @@
-\documentclass[11pt,letterpaper]{article}
+\documentclass[11pt]{article}
+
 \usepackage[margin=1in]{geometry}
 \usepackage{graphicx}
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{booktabs}
-\usepackage{hyperref}
-\usepackage{float}
 \usepackage{subcaption}
-\usepackage{xcolor}
-\usepackage{listings}
+\usepackage{float}
 \usepackage{enumitem}
-\usepackage{parskip}
 
-\hypersetup{
-    colorlinks=true,
-    linkcolor=blue,
-    urlcolor=blue,
-    citecolor=blue
-}
-
-\lstset{
-    basicstyle=\small\ttfamily,
-    breaklines=true,
-    frame=single,
-    backgroundcolor=\color{gray!10}
-}
-
-\title{\textbf{Programming Assignment 3}\\
-Faster R-CNN and Mask R-CNN Implementation from Scratch}
-\author{COSC 83 --- Spring 2024--25}
-\date{May 2025}
+\title{PA3 Report}
+\author{Martin Coleman \\ COSC 83}
+\date{5/12/26}
 
 \begin{document}
 \maketitle
 
-\tableofcontents
-\newpage
-
-% -----------------------------------------------------------------------
 \section{Overview}
 
-This report covers a from-scratch PyTorch implementation of Faster R-CNN~\cite{ren2015faster} for object detection on Pascal VOC 2007, along with a Mask R-CNN extension~\cite{he2017mask} for instance segmentation. The backbone is a pretrained VGG16 network; everything else---anchor generation, RPN, RoI pooling, detection head, training loop---was implemented from scratch.
+This report covers a from-scratch PyTorch implementation of Faster R-CNN and a Mask R-CNN extension. The backbone is pretrained VGG16; everything else---anchor generation, RPN, RoI pooling, detection head, training loop---is implemented from scratch. Both models were trained on Pascal VOC 2007 on a Colab T4 GPU.
 
-Faster R-CNN achieves \textbf{59.34\% mAP} on VOC 2007 test. Mask R-CNN, which adds RoI Align and a mask branch on top of the same detection head, achieves \textbf{59.62\% mAP} on detection with an additional instance segmentation output. Both models were trained on a Tesla T4 GPU via Google Colab.
+Faster R-CNN achieves \textbf{59.34\% mAP}. Mask R-CNN achieves \textbf{59.62\% mAP} on detection (box mAP only; mask mAP is evaluated qualitatively since VOC 2007 test has no public segmentation annotations) and additionally produces per-instance binary masks.
 
 % -----------------------------------------------------------------------
 \section{Implementation}
 
 \subsection{Backbone}
 
-The backbone is pretrained VGG16, using all conv layers up to (but not including) the final max pool (\texttt{vgg16.features[:-1]}). This gives a $1/16$-resolution feature map with 512 channels. The first two conv blocks (layers 0--9) are frozen, consistent with the original paper.
+Pretrained VGG16, all conv layers up to (but not including) the final max pool (\texttt{vgg16.features[:-1]}), giving a $1/16$-resolution feature map at 512 channels. Layers 0--9 (first two conv blocks) are frozen during training.
 
 \subsection{Region Proposal Network (Part 2)}
 
-\subsubsection{Anchor Generation}
+\paragraph{Anchor generation.}
+9 anchors per feature map location: scales $\{128, 256, 512\}$ $\times$ aspect ratios $\{0.5, 1.0, 2.0\}$. A base anchor at scale $s$ and ratio $r$ has $w = s/\sqrt{r}$, $h = s\sqrt{r}$, centered on the grid cell. These are shifted across all locations using stride $= \lfloor H_\text{img} / H_\text{feat} \rfloor$. For a $600\times800$ input the feature map is roughly $38\times50$, giving about 17,100 anchors.
 
-Anchors are placed at every spatial location of the feature map. For each location, $K = |\text{scales}| \times |\text{ratios}|$ anchors are generated. With scales $\{128, 256, 512\}$ and aspect ratios $\{0.5, 1.0, 2.0\}$, that's $K = 9$ anchors per location. For a $600 \times 800$ input the feature map is roughly $38 \times 50$, giving around 17,100 anchors in total.
+\paragraph{RPN head.}
+A shared $3\times3$ conv (512 channels), then a $1\times1$ classification conv outputting one objectness logit per anchor ($K$ logits per location total) and a $1\times1$ regression conv outputting $4K$ box deltas. Each anchor is treated as a binary foreground/background problem and trained with \texttt{BCEWithLogitsLoss}---not $2K$ softmax scores. Weights initialized from $\mathcal{N}(0, 0.01)$, biases to zero.
 
-A base anchor at scale $s$ and ratio $r$ has width $w = s / \sqrt{r}$ and height $h = s \cdot \sqrt{r}$, centered at the grid cell. These are shifted across all feature map locations using stride $= \lfloor H_\text{img} / H_\text{feat} \rfloor$.
+\paragraph{Anchor assignment.}
+Positive if IoU $\geq 0.7$ with any GT box, negative if IoU $< 0.3$, ignored otherwise. The anchor with the highest IoU per GT box is forced positive regardless of threshold, to guarantee coverage. 256 anchors sampled at 1:1 positive/negative ratio.
 
-\subsubsection{RPN Head}
-
-The RPN consists of:
-\begin{itemize}[noitemsep]
-    \item A shared $3 \times 3$ conv (512 channels, same padding)
-    \item A $1 \times 1$ classification conv outputting $K$ objectness logits per location
-    \item A $1 \times 1$ regression conv outputting $4K$ box deltas $(t_x, t_y, t_w, t_h)$ per location
-\end{itemize}
-
-All weights initialized from $\mathcal{N}(0, 0.01)$, biases to zero.
-
-\subsubsection{Anchor Assignment and Sampling}
-
-An anchor is labeled positive if its IoU with any GT box is $\geq 0.7$, negative if IoU $< 0.3$, and ignored otherwise. For each GT box, the anchor with the highest IoU is forced positive regardless of threshold---this ensures every GT object is covered even in degenerate cases. 256 anchors are then sampled at a 1:1 positive/negative ratio.
-
-\subsubsection{Loss Functions}
-
-The RPN uses a multi-task loss:
+\paragraph{Loss.}
 \begin{equation}
     \mathcal{L}_\text{RPN} = \mathcal{L}_\text{cls}^\text{RPN} + \mathcal{L}_\text{reg}^\text{RPN}
 \end{equation}
-where $\mathcal{L}_\text{cls}$ is binary cross-entropy over sampled anchors and $\mathcal{L}_\text{reg}$ is smooth-$\ell_1$ over positive anchors only:
-\begin{equation}
-    \text{smooth}_{L_1}(x) = \begin{cases} 0.5x^2 & |x| < 1 \\ |x| - 0.5 & \text{otherwise} \end{cases}
-\end{equation}
+$\mathcal{L}_\text{cls}$ is binary cross-entropy over sampled anchors; $\mathcal{L}_\text{reg}$ is smooth-$\ell_1$ over positive anchors only.
 
-\subsubsection{Proposal Filtering}
-
-Box deltas are decoded into proposal coordinates, then filtered:
-\begin{enumerate}[noitemsep]
-    \item Keep top-12,000 (train) / 6,000 (test) by objectness score
-    \item Clamp to image boundary
-    \item Remove degenerate boxes (width or height $< 1$ px)
-    \item NMS at IoU threshold 0.7
-    \item Keep top-2,000 (train) / 300 (test) survivors
-\end{enumerate}
-
-The ordering matters: clamping happens before degenerate-box removal because clamping can itself create degenerate boxes.
+\paragraph{Proposal filtering.}
+During training: keep pre-NMS top 12k by objectness, apply NMS at IoU 0.7, keep post-NMS top 2k. During testing: pre-NMS top 6k, same NMS, post-NMS top 300. Boxes are clamped to the image boundary before degenerate-box removal because clamping itself can create zero-width boxes.
 
 \subsection{RoI Feature Extraction (Part 3)}
 
-RoI pooling~\cite{ren2015faster} extracts fixed $7 \times 7$ feature maps from each proposal. Spatial scale is $\min(H_\text{feat}/H_\text{img},\, W_\text{feat}/W_\text{img})$.
-
-For training, GT boxes are appended to the proposal set. Each proposal is matched to its highest-IoU GT box. IoU $\geq 0.5$ is positive (assigned the GT class), IoU $< 0.5$ is background. 128 proposals are sampled at a 1:4 positive/negative ratio.
+RoI Pooling extracts $7\times7$ feature maps per proposal. The spatial scale is $\approx 1/16$ for VGG16 (no final max-pool), computed dynamically as $\min(H_\text{feat}/H_\text{img},\, W_\text{feat}/W_\text{img})$ to handle rounding after image resizing. GT boxes are appended to proposals during training. Each proposal is matched to its highest-IoU GT box; IoU $\geq 0.5$ is positive, $< 0.5$ is background. 128 proposals sampled at 1:4 positive/negative ratio.
 
 \subsection{Detection Head (Part 4)}
 
-The detection head processes pooled features through:
-\begin{itemize}[noitemsep]
-    \item Flatten + FC(25088, 1024) + ReLU
-    \item FC(1024, 1024) + ReLU
-    \item Classification head: FC(1024, 21)
-    \item Regression head: FC(1024, $21 \times 4$) --- per-class box deltas
-\end{itemize}
+Flatten $\to$ FC(25088, 1024) $\to$ ReLU $\to$ FC(1024, 1024) $\to$ ReLU, then a classification head FC(1024, 21) and regression head FC(1024, $21\times4$). Classification weights from $\mathcal{N}(0, 0.01)$, regression from $\mathcal{N}(0, 0.001)$ (tighter, following the paper). At inference: pick the top non-background class, decode its box, then per-class NMS at 0.3 with a 0.05 score threshold.
 
-Classification weights are initialized from $\mathcal{N}(0, 0.01)$, regression from $\mathcal{N}(0, 0.001)$, following the paper. At inference, the highest-scoring non-background class is selected and its box decoded. Per-class NMS at 0.3 IoU and a 0.05 score threshold are applied.
+\subsection{Full Model and Training (Part 5)}
 
-\subsection{Full Model and Training Loop (Part 5)}
-
-The full pipeline:
-\[
-\text{Image} \rightarrow \text{Backbone} \rightarrow \text{RPN} \rightarrow \text{RoI Pool} \rightarrow \text{Detection Head}
-\]
-
-Images are normalized with ImageNet mean/std and resized so the shorter side is 600 px (max 1000 px) while preserving aspect ratio. GT boxes are scaled accordingly. At inference, predicted boxes are mapped back to original image coordinates.
+Images are normalized with ImageNet mean/std and resized so the shorter side is 600 px (max 1000), preserving aspect ratio. GT boxes are scaled accordingly. At inference, predicted boxes are mapped back to original image coordinates.
 
 Total loss:
 \begin{equation}
     \mathcal{L} = \mathcal{L}_\text{cls}^\text{RPN} + \mathcal{L}_\text{reg}^\text{RPN} + \mathcal{L}_\text{cls}^\text{FRCNN} + \mathcal{L}_\text{reg}^\text{FRCNN}
 \end{equation}
 
-Training uses SGD with momentum 0.9, weight decay $5 \times 10^{-4}$, initial LR $10^{-3}$ decayed $\times 0.1$ at epochs 14 and 18, for 20 epochs total.
+SGD with momentum 0.9, weight decay $5\times10^{-4}$, LR $10^{-3}$ decayed $\times0.1$ at epochs 14 and 18, for 20 epochs.
 
 % -----------------------------------------------------------------------
 \section{Comparison with PyTorch Faster R-CNN}
 
-PyTorch's \texttt{fasterrcnn\_resnet50\_fpn} differs in a few key ways:
+PyTorch's \texttt{fasterrcnn\_resnet50\_fpn} is meaningfully different in a few ways:
 
 \begin{table}[H]
 \centering
@@ -143,17 +79,17 @@ PyTorch's \texttt{fasterrcnn\_resnet50\_fpn} differs in a few key ways:
 \toprule
 \textbf{Component} & \textbf{Our Implementation} & \textbf{PyTorch torchvision} \\
 \midrule
-Backbone          & VGG16              & ResNet-50 + FPN \\
-Feature pyramid   & Single scale       & Multi-scale FPN \\
-RoI operation     & RoI Pooling        & RoI Align \\
-Anchor scales     & 3 (128, 256, 512)  & 5 (32--512) \\
-Pretrained on     & ImageNet (backbone)& COCO \\
+Backbone        & VGG16               & ResNet-50 + FPN \\
+Feature pyramid & Single scale        & Multi-scale FPN \\
+RoI operation   & RoI Pooling         & RoI Align \\
+Anchor scales   & 3 (128, 256, 512)   & 5 (32--512) \\
+Pretrained on   & ImageNet (backbone) & COCO \\
 \bottomrule
 \end{tabular}
-\caption{Architecture comparison with PyTorch's built-in Faster R-CNN.}
+\caption{Architecture comparison.}
 \end{table}
 
-The biggest gap is the backbone: ResNet-50 with an FPN gives multi-scale features that are much better at detecting small objects, whereas VGG16's single-scale output struggles with them. RoI Align also avoids the quantization artifacts from RoI Pooling, which matters for tight localization. Our model's lower mAP is mostly explained by these architectural differences rather than anything wrong with the training procedure.
+The main gap is the backbone. ResNet-50 with FPN gives multi-scale features that handle small objects much better than VGG16's single-scale output. RoI Align also avoids the quantization artifacts from RoI Pooling. The $\sim$10 point mAP difference below is mostly backbone and RoI op, not the training procedure.
 
 \begin{table}[H]
 \centering
@@ -161,8 +97,8 @@ The biggest gap is the backbone: ResNet-50 with an FPN gives multi-scale feature
 \toprule
 \textbf{Model} & \textbf{mAP @ 0.5} & \textbf{Backbone} \\
 \midrule
-Our Faster R-CNN & 59.34 & VGG16 \\
-PyTorch Faster R-CNN (pretrained COCO) & $\sim$70.0 & ResNet-50 + FPN \\
+Our Faster R-CNN & 59.34\% & VGG16 \\
+PyTorch Faster R-CNN (pretrained COCO) & $\sim$70.0\% & ResNet-50 + FPN \\
 \bottomrule
 \end{tabular}
 \caption{mAP on VOC 2007 test set.}
@@ -174,14 +110,12 @@ PyTorch Faster R-CNN (pretrained COCO) & $\sim$70.0 & ResNet-50 + FPN \\
 
 \subsection{Training Curves}
 
-Training ran on a Tesla T4 GPU (Google Colab) for 20 epochs, taking roughly 13 minutes per epoch (about 4.5 hours total). SGD with momentum 0.9, weight decay $5 \times 10^{-4}$, initial LR $10^{-3}$, decayed $\times 0.1$ at epochs 14 and 18.
-
-Figure~\ref{fig:loss_curves} shows all four training losses. The sharp drops at epoch 14 are the first LR decay; the smaller drop at epoch 18 is the second. All losses converge cleanly with no signs of instability.
+20 epochs on a Colab T4 GPU, roughly 13 min/epoch ($\sim$4.5 hrs total). Figure~\ref{fig:loss_curves} shows all four losses. The sharp drops at epoch 14 are the first LR decay; the smaller drop at epoch 18 is the second. Everything converges cleanly.
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.9\textwidth]{figures/loss_curves.png}
-    \caption{Faster R-CNN training losses over 20 epochs. Vertical dashed lines mark LR decay steps at epochs 14 and 18.}
+    \caption{Faster R-CNN training losses. Dashed lines mark LR decay at epochs 14 and 18.}
     \label{fig:loss_curves}
 \end{figure}
 
@@ -211,22 +145,22 @@ motorbike    & 67.89 & & \\
 \textbf{mAP} & \multicolumn{3}{c}{\textbf{59.34}} \\
 \bottomrule
 \end{tabular}
-\caption{Per-class average precision on VOC 2007 test set.}
+\caption{Per-class AP on VOC 2007 test set.}
 \label{tab:per_class_ap}
 \end{table}
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.95\textwidth]{figures/per_class_ap.png}
-    \caption{Per-class AP on VOC 2007 test set. Small or heavily occluded classes (bottle, pottedplant, chair, boat) are consistently harder. Large, visually distinctive objects (cat, dog, horse) are easiest.}
+    \caption{Per-class AP. Small, cluttered objects (bottle, pottedplant, chair) are consistently the hardest. Large distinctive objects (cat, dog, horse) are easiest.}
     \label{fig:per_class_ap}
 \end{figure}
 
-The pattern makes intuitive sense. Classes like \textit{cat}, \textit{dog}, and \textit{horse} are large, rarely occluded, and have consistent appearance---all of which favor a single-scale detector. \textit{Bottle} (33.78\%) and \textit{pottedplant} (34.35\%) are small and easily confused with background clutter. \textit{Chair} (37.29\%) is difficult because chairs come in many shapes and are frequently occluded by people or tables.
+The pattern makes sense. Cat (76.43\%), dog (72.33\%), and horse (71.82\%) are large, rarely occluded, and look about the same from most angles. Bottle (33.78\%) and pottedplant (34.35\%) are small and cluttered. Chair (37.29\%) is tough because chairs come in a huge variety of shapes and are almost always partially occluded.
 
 \subsection{Detection Examples}
 
-Figure~\ref{fig:detections} shows two test images with ground truth boxes (left) and model predictions (right). The horse/rider image illustrates confident multi-object detection across two different classes. The indoor scene tests the harder categories; the model correctly identifies people, the sofa, and multiple chairs despite significant overlap between objects.
+Figure~\ref{fig:detections} shows two test images with GT boxes (green) and predictions (red). The horse image is a good case: high-confidence detections across two classes, boxes tightly fit. The indoor scene is harder---person, sofa, and multiple chairs overlapping---but the model gets them all.
 
 \begin{figure}[H]
     \centering
@@ -237,7 +171,7 @@ Figure~\ref{fig:detections} shows two test images with ground truth boxes (left)
     \hfill
     \begin{subfigure}[t]{0.235\textwidth}
         \includegraphics[width=\textwidth]{figures/samples/det_pred_5.jpg}
-        \caption{Pred: horse, person}
+        \caption{Pred: horse 1.00, person 0.99/0.97}
     \end{subfigure}
     \hfill
     \begin{subfigure}[t]{0.235\textwidth}
@@ -249,7 +183,7 @@ Figure~\ref{fig:detections} shows two test images with ground truth boxes (left)
         \includegraphics[width=\textwidth]{figures/samples/det_pred_3.jpg}
         \caption{Pred: person, sofa, chair}
     \end{subfigure}
-    \caption{Ground truth (green) vs.\ predicted (red) boxes on VOC 2007 test images. Scores shown above each detection.}
+    \caption{Ground truth (green) vs.\ predicted (red) on VOC 2007 test images.}
     \label{fig:detections}
 \end{figure}
 
@@ -258,52 +192,51 @@ Figure~\ref{fig:detections} shows two test images with ground truth boxes (left)
 
 \subsection{Architecture Changes}
 
-Mask R-CNN adds an instance segmentation branch in parallel with the detection head. The detection branch is unchanged; masks are predicted only for the foreground proposals and only for their predicted class, so the box and classification losses are not affected.
+Mask R-CNN adds a mask branch in parallel with the detection head. The detection branch is unchanged; the mask branch only fires for foreground proposals and only predicts the mask for the GT class.
 
-\paragraph{RoI Align.} The mask branch uses RoI Align~\cite{he2017mask} at $14 \times 14$ resolution instead of RoI Pooling. RoI Align avoids the two rounds of quantization in standard RoI Pooling by using bilinear interpolation at each sampling point within a bin:
+\paragraph{RoI Align.}
+The mask branch uses RoI Align at $14\times14$ resolution. RoI Align avoids the double quantization in RoI Pooling by using bilinear interpolation at sub-pixel sampling points:
 \begin{equation}
     f(x, y) = \sum_{i,j} w_{ij} \cdot f(x_i, y_j)
 \end{equation}
-where $(x_i, y_j)$ are the four neighboring integer grid points and $w_{ij}$ are bilinear weights. This eliminates misalignment between the RoI and the feature map, which matters a lot at the pixel level.
+This eliminates the misalignment that makes pixel-level prediction harder with standard pooling.
 
-\paragraph{Mask Head.} A small FCN processes the $14 \times 14$ RoI Align output:
+\paragraph{Mask head.}
+A small FCN on top of the $14\times14$ RoI Align output:
 \begin{equation}
     \underbrace{14 \times 14}_{\text{RoI Align}} \xrightarrow{\times 4\ \text{conv}(256,\, 3\times3)} \xrightarrow{\text{deconv}(2\times)} \underbrace{28 \times 28}_{\text{mask logits}}
 \end{equation}
+4 $\times$ [Conv2d(in, 256, $3\times3$) + ReLU], ConvTranspose2d(256, 256, $2\times2$, stride=2) + ReLU, Conv2d(256, $C$, $1\times1$). Outputs $C$ binary mask logits at $28\times28$ per RoI.
 
-Specifically: 4 $\times$ [Conv2d(in, 256, $3\times3$, padding 1) + ReLU], ConvTranspose2d(256, 256, $2\times2$, stride=2) + ReLU, then Conv2d(256, $C$, $1\times1$) producing $C$ binary mask logits at $28 \times 28$ per RoI.
+\paragraph{Mask targets.}
+For each foreground proposal, the GT binary mask is cropped to the matched GT bounding box and resized to $28\times28$ using RoI Align at spatial scale 1.0. This gives a target aligned with the predicted mask.
 
-\paragraph{Mask Targets.} For each sampled foreground proposal, the corresponding GT binary mask is cropped to the matched GT bounding box and resized to $28 \times 28$ using RoI Align at spatial scale 1.0. This gives a target that is spatially aligned with the predicted mask.
+\subsection{Loss}
 
-\subsection{Loss Function}
-
-Total loss:
 \begin{equation}
     \mathcal{L} = \mathcal{L}_\text{cls}^\text{RPN} + \mathcal{L}_\text{reg}^\text{RPN} + \mathcal{L}_\text{cls} + \mathcal{L}_\text{reg} + \mathcal{L}_\text{mask}
 \end{equation}
 
-The mask loss is binary cross-entropy applied only to foreground proposals, using only the mask channel for the GT class:
+Binary cross-entropy over foreground proposals only, using only the mask channel for the GT class:
 \begin{equation}
     \mathcal{L}_\text{mask} = -\frac{1}{N_\text{fg}} \sum_{i \in \text{fg}} \text{BCE}\!\left(\hat{m}_i^{c_i},\, m_i^*\right)
 \end{equation}
-where $\hat{m}_i^{c_i}$ is the predicted mask logit for true class $c_i$, and $m_i^*$ is the $28 \times 28$ GT binary mask. Using only the GT class channel (rather than all $C$ channels) means wrong-class masks never get a gradient, so the mask head learns class-specific shapes.
+Only supervising the GT class channel means wrong-class masks never get a gradient, so the head learns class-specific shapes.
 
 \subsection{Dataset}
 
-VOC 2007 provides instance segmentation masks for 632 images in \texttt{SegmentationObject/}. The segmentation PNG encodes instance indices: pixel value $k > 0$ is the $k$-th object in the XML annotation (1-indexed), and 255 is a void/boundary region. All 5,011 training images are used; the mask loss is simply skipped for images without segmentation annotations.
+VOC 2007 has instance segmentation masks for 632 images in \texttt{SegmentationObject/}. The PNG encodes instance indices: pixel value $k > 0$ is the $k$-th object in the XML annotation (1-indexed), 255 is void/boundary. All 5,011 training images are used; the mask loss is skipped for images without segmentation annotations.
 
-\subsection{Training Curves}
+\subsection{Training}
 
-Mask R-CNN was trained with the same hyperparameters as Faster R-CNN. The mask loss started at 0.0260 at epoch 0 and converged to 0.0109 by epoch 19.
+Same hyperparameters as Faster R-CNN. The mask loss started at 0.0260 and converged to 0.0109 by epoch 19.
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.9\textwidth]{figures/mask_loss_curves.png}
-    \caption{Mask R-CNN training curves. Left: RPN and FRCNN classification losses. Right: mask branch BCE loss converging over 20 epochs.}
+    \caption{Mask R-CNN training. Left: classification losses. Right: mask BCE loss over 20 epochs.}
     \label{fig:mask_loss_curves}
 \end{figure}
-
-\subsection{Detection Results}
 
 \begin{table}[H]
 \centering
@@ -315,14 +248,14 @@ Faster R-CNN (ours)  & 59.34\% & VGG16 \\
 Mask R-CNN (ours)    & 59.62\% & VGG16 \\
 \bottomrule
 \end{tabular}
-\caption{Detection mAP on VOC 2007 test set. Adding the mask branch does not hurt detection accuracy.}
+\caption{Detection mAP on VOC 2007 test. Adding the mask branch doesn't hurt detection.}
 \end{table}
 
-The detection mAP is essentially the same between the two models (59.34 vs.\ 59.62), which is expected---the mask head runs in parallel and does not touch the classification or localization branches.
+Mask mIoU on the test set cannot be computed because the VOC 2007 test release does not include segmentation annotations---the \texttt{SegmentationObject/} directory is only present in the trainval download. The mask loss convergence (0.0260 $\to$ 0.0109 over 20 epochs) and the qualitative results in Figure~\ref{fig:masks} serve as the evaluation proxy for the mask branch.
 
 \subsection{Instance Segmentation Examples}
 
-Figure~\ref{fig:masks} shows predicted instance masks overlaid on test images. The masks are predicted at $28 \times 28$ resolution and pasted back into the detected bounding box at original image scale. The cat example is a clean single-instance case; the dog example shows two overlapping instances being segmented separately.
+Predicted masks are $28\times28$ crops pasted back into the detected bounding box at original image scale. Figure~\ref{fig:masks} shows two examples: a clean single-instance cat prediction and a two-dog case where overlapping instances are segmented separately.
 
 \begin{figure}[H]
     \centering
@@ -333,66 +266,47 @@ Figure~\ref{fig:masks} shows predicted instance masks overlaid on test images. T
     \hfill
     \begin{subfigure}[t]{0.235\textwidth}
         \includegraphics[width=\textwidth]{figures/samples/mask_pred_1.jpg}
-        \caption{Pred: cat + mask}
+        \caption{Pred: cat 1.00 + mask}
     \end{subfigure}
     \hfill
     \begin{subfigure}[t]{0.235\textwidth}
         \includegraphics[width=\textwidth]{figures/samples/mask_gt_7.png}
-        \caption{GT: dog (×2)}
+        \caption{GT: dog, dog}
     \end{subfigure}
     \hfill
     \begin{subfigure}[t]{0.235\textwidth}
         \includegraphics[width=\textwidth]{figures/samples/mask_pred_7.jpg}
-        \caption{Pred: dog + masks}
+        \caption{Pred: dog 0.97/0.98 + masks}
     \end{subfigure}
-    \caption{Instance segmentation results. Colored overlays show predicted binary masks for each detected object.}
+    \caption{Instance segmentation results. Colored overlays show the predicted binary masks.}
     \label{fig:masks}
 \end{figure}
 
 % -----------------------------------------------------------------------
-\section{Challenges and Solutions}
+\section{Challenges}
 
-\paragraph{Anchor generation.} The stride has to be computed from the actual image/feature-map size ratio rather than assumed to be 16 everywhere, since resized images aren't always exact multiples of 16. Anchor centers also need to be offset by $\text{stride}/2$ to sit in the middle of each grid cell.
+\paragraph{Stride calculation.}
+The stride has to be computed from the actual image/feature-map size ratio each forward pass, not hardcoded to 16, because resized images aren't always exact multiples. Anchor centers also need to be offset by stride/2 to sit in the middle of the grid cell.
 
-\paragraph{Proposal filtering order.} Clamping proposals to the image boundary can itself create degenerate boxes (zero width or height), so degenerate-box removal must come \emph{after} clamping, not before.
+\paragraph{Proposal filtering order.}
+I ran into degenerate-box issues until I realized clamping proposals to the image boundary can itself create zero-width boxes. Degenerate removal has to happen after clamping.
 
-\paragraph{Class-specific regression.} The detection head predicts $21 \times 4$ deltas. During training, only the deltas for the GT class are supervised; at inference, only the top-scoring class's deltas are decoded. Getting the index slicing right---\texttt{box\_preds[range(N), labels]}---took some care.
+\paragraph{Class-specific regression.}
+The detection head predicts $21\times4$ deltas. At training only the GT class deltas are supervised; at inference only the top-scoring class deltas are decoded. Getting the index slicing right---\texttt{box\_preds[range(N), labels]}---took more debugging than I expected.
 
-\paragraph{Mask target generation.} To produce $28 \times 28$ GT masks aligned with the proposal, we crop the full-resolution GT mask to the GT bounding box and resize using RoI Align at spatial scale 1.0 (treating the crop as a $1 \times 1$ ``image''). Naive bilinear resize would not respect the box boundary.
+\paragraph{Mask target generation.}
+To get $28\times28$ GT masks aligned with each proposal, I crop the full-resolution GT mask to the GT bounding box and resize using RoI Align at spatial scale 1.0. Plain bilinear resize doesn't respect the box boundary the same way.
 
-\paragraph{VOC segmentation matching.} The integer instance indices in the \texttt{SegmentationObject} PNGs correspond to annotation order in the XML (1-indexed). A few images have edge cases where this correspondence breaks; a fallback using bounding box overlap handles those.
+\paragraph{VOC segmentation matching.}
+The integer instance indices in the \texttt{SegmentationObject} PNGs correspond to annotation order in the XML (1-indexed). A few images have edge cases where this mapping breaks; I added a bounding-box-overlap fallback for those.
 
-\paragraph{RoI Align gradient on MPS.} During local development on Apple MPS, RoI Align from torchvision occasionally hits device-specific issues. The final training ran on Colab CUDA where everything works cleanly, but supporting both backends in the code required checking that all ops have MPS-compatible implementations in the installed PyTorch version.
+\paragraph{CUDA vs MPS.}
+Final training ran on Colab CUDA. The code also supports Apple MPS as a fallback for local development, though I hit one or two ops during testing that weren't fully MPS-compatible in my PyTorch version and had to verify everything worked before switching to Colab.
 
 % -----------------------------------------------------------------------
 \section{Conclusion}
 
-Both Faster R-CNN and Mask R-CNN were implemented from scratch in PyTorch and trained on Pascal VOC 2007. The Faster R-CNN achieves 59.34\% mAP, consistent with what you'd expect from a VGG16 single-scale model. The Mask R-CNN extension matches that detection performance at 59.62\% mAP while additionally producing per-instance binary masks. The main bottleneck relative to stronger baselines is the backbone---switching to ResNet-50 with FPN would likely close most of the gap to the \textasciitilde70\% reference number.
+Both models were implemented from scratch and trained on VOC 2007. Faster R-CNN hits 59.34\% mAP, which is reasonable for a VGG16 single-scale model. Mask R-CNN matches that at 59.62\% mAP and adds instance segmentation. Closing the gap to the $\sim$70\% torchvision reference would mostly come from switching to a ResNet-50 + FPN backbone, not from changes to the training procedure.
 
-% -----------------------------------------------------------------------
-\bibliographystyle{plain}
-\begin{thebibliography}{9}
-
-\bibitem{ren2015faster}
-S.\ Ren, K.\ He, R.\ Girshick, J.\ Sun.
-\textit{Faster R-CNN: Towards Real-Time Object Detection with Region Proposal Networks}.
-NeurIPS 2015.
-
-\bibitem{he2017mask}
-K.\ He, G.\ Gkioxari, P.\ Dollar, R.\ Girshick.
-\textit{Mask R-CNN}.
-ICCV 2017.
-
-\bibitem{simonyan2014vgg}
-K.\ Simonyan, A.\ Zisserman.
-\textit{Very Deep Convolutional Networks for Large-Scale Image Recognition}.
-ICLR 2015.
-
-\bibitem{pascal2010}
-M.\ Everingham et al.
-\textit{The Pascal Visual Object Classes (VOC) Challenge}.
-IJCV 2010.
-
-\end{thebibliography}
 
 \end{document}
