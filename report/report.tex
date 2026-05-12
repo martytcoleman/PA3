@@ -262,28 +262,28 @@ Mask mIoU is evaluated on the 210 VOC 2007 segmentation test images using the \t
 
 \subsection{Instance Segmentation Examples}
 
-Predicted masks are $28\times28$ crops pasted back into the detected bounding box at original image scale. Figure~\ref{fig:masks} shows two examples: a clean single-instance cat prediction and a two-dog case where overlapping instances are segmented separately.
+Predicted masks are $28\times28$ crops pasted back into the detected bounding box at original image scale. Figure~\ref{fig:masks} shows two examples: a single-instance bird prediction where the mask tightly follows the body contour, and a multi-class scene (person and two TV monitors) where each instance receives a distinct colored mask.
 
 \begin{figure}[H]
     \centering
     \begin{subfigure}[t]{0.235\textwidth}
         \includegraphics[width=\textwidth]{figures/samples/mask_gt_1.png}
-        \caption{GT: cat, bottle}
+        \caption{GT: bird}
     \end{subfigure}
     \hfill
     \begin{subfigure}[t]{0.235\textwidth}
         \includegraphics[width=\textwidth]{figures/samples/mask_pred_1.jpg}
-        \caption{Pred: cat + mask}
+        \caption{Pred: bird + mask}
     \end{subfigure}
     \hfill
     \begin{subfigure}[t]{0.235\textwidth}
         \includegraphics[width=\textwidth]{figures/samples/mask_gt_7.png}
-        \caption{GT: dog, dog}
+        \caption{GT: tvmonitor, person}
     \end{subfigure}
     \hfill
     \begin{subfigure}[t]{0.235\textwidth}
         \includegraphics[width=\textwidth]{figures/samples/mask_pred_7.jpg}
-        \caption{Pred: dog, dog + masks}
+        \caption{Pred: tvmonitor, person + masks}
     \end{subfigure}
     \caption{Instance segmentation results. Colored overlays show the predicted binary masks.}
     \label{fig:masks}
