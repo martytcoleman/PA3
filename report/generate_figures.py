@@ -54,17 +54,17 @@ plt.savefig('figures/loss_curves.png', dpi=150, bbox_inches='tight')
 print('saved figures/loss_curves.png')
 
 # mask r-cnn loss curves
-mask_rpn_cls = [0.1853, 0.1310, 0.1132, 0.1008, 0.0921, 0.0844, 0.0784, 0.0724,
-                0.0670, 0.0613, 0.0585, 0.0547, 0.0523, 0.0495, 0.0363, 0.0340,
-                0.0323, 0.0313, 0.0306, 0.0302]
+mask_rpn_cls = [0.1833, 0.1313, 0.1141, 0.1011, 0.0908, 0.0849, 0.0782, 0.0713,
+                0.0675, 0.0620, 0.0587, 0.0552, 0.0518, 0.0504, 0.0370, 0.0341,
+                0.0326, 0.0319, 0.0308, 0.0305]
 
-mask_frcnn_cls = [0.4380, 0.2868, 0.2479, 0.2199, 0.1993, 0.1871, 0.1744, 0.1653,
-                  0.1547, 0.1499, 0.1423, 0.1378, 0.1354, 0.1300, 0.0996, 0.0949,
-                  0.0924, 0.0909, 0.0891, 0.0877]
+mask_frcnn_cls = [0.4454, 0.2842, 0.2455, 0.2202, 0.1990, 0.1850, 0.1735, 0.1633,
+                  0.1594, 0.1495, 0.1442, 0.1390, 0.1321, 0.1330, 0.1010, 0.0952,
+                  0.0947, 0.0921, 0.0899, 0.0892]
 
-mask_loss = [0.0260, 0.0184, 0.0169, 0.0155, 0.0146, 0.0142, 0.0139, 0.0136,
-             0.0131, 0.0128, 0.0126, 0.0121, 0.0124, 0.0121, 0.0114, 0.0113,
-             0.0111, 0.0112, 0.0110, 0.0109]
+mask_loss = [0.0580, 0.0506, 0.0469, 0.0448, 0.0434, 0.0426, 0.0419, 0.0413,
+             0.0410, 0.0403, 0.0398, 0.0395, 0.0391, 0.0389, 0.0376, 0.0373,
+             0.0372, 0.0372, 0.0370, 0.0371]
 
 fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 axes[0].plot(epochs, mask_rpn_cls, 'b-o', markersize=4, label='RPN cls loss')
@@ -90,7 +90,7 @@ plt.tight_layout()
 plt.savefig('figures/mask_loss_curves.png', dpi=150, bbox_inches='tight')
 print('saved figures/mask_loss_curves.png')
 
-# per-class ap bar chart
+# faster r-cnn per-class ap bar chart
 classes = ['aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car',
            'cat', 'chair', 'cow', 'diningtable', 'dog', 'horse', 'motorbike',
            'person', 'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor']
@@ -100,13 +100,31 @@ aps = [59.66, 68.31, 56.66, 42.45, 33.78, 68.08, 68.24, 76.43, 37.29, 63.49,
 fig, ax = plt.subplots(figsize=(14, 5))
 colors = ['#2196F3' if ap >= 60 else '#FF9800' if ap >= 45 else '#F44336' for ap in aps]
 bars = ax.bar(classes, aps, color=colors, edgecolor='white', linewidth=0.5)
-ax.axhline(y=59.34, color='black', linestyle='--', linewidth=1.5, label=f'mAP = 59.34%')
+ax.axhline(y=59.34, color='black', linestyle='--', linewidth=1.5, label='mAP = 59.34%')
 ax.set_xlabel('Class')
 ax.set_ylabel('Average Precision (%)')
-ax.set_title('Per-Class Average Precision on VOC 2007 Test Set')
+ax.set_title('Faster R-CNN Per-Class AP on VOC 2007 Test Set')
 ax.set_ylim(0, 90)
 ax.legend()
 plt.xticks(rotation=45, ha='right')
 plt.tight_layout()
 plt.savefig('figures/per_class_ap.png', dpi=150, bbox_inches='tight')
 print('saved figures/per_class_ap.png')
+
+# mask r-cnn per-class ap bar chart
+mask_aps = [66.03, 67.76, 55.02, 40.49, 33.71, 66.37, 68.31, 76.64, 37.00, 63.95,
+            53.20, 70.82, 75.68, 68.42, 66.08, 37.21, 56.76, 54.12, 71.72, 63.19]
+
+fig, ax = plt.subplots(figsize=(14, 5))
+colors = ['#2196F3' if ap >= 60 else '#FF9800' if ap >= 45 else '#F44336' for ap in mask_aps]
+ax.bar(classes, mask_aps, color=colors, edgecolor='white', linewidth=0.5)
+ax.axhline(y=59.62, color='black', linestyle='--', linewidth=1.5, label='mAP = 59.62%')
+ax.set_xlabel('Class')
+ax.set_ylabel('Average Precision (%)')
+ax.set_title('Mask R-CNN Per-Class AP on VOC 2007 Test Set')
+ax.set_ylim(0, 90)
+ax.legend()
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.savefig('figures/mask_per_class_ap.png', dpi=150, bbox_inches='tight')
+print('saved figures/mask_per_class_ap.png')

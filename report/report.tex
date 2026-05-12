@@ -18,9 +18,9 @@
 
 \section{Overview}
 
-This report covers a from-scratch PyTorch implementation of Faster R-CNN and a Mask R-CNN extension. The backbone is pretrained VGG16; everything else---anchor generation, RPN, RoI pooling, detection head, training loop---is implemented from scratch. Both models were trained on Pascal VOC 2007 on a Colab T4 GPU.
+This report covers my from scratch PyTorch implementation of Faster R-CNN and a Mask R-CNN extension for the bonus. The backbone is pretrained VGG16; everything else (anchor generation, RPN, RoI pooling, detection head, training loop) is implemented from scratch. Both models were trained on Pascal VOC 2007 on a Colab T4 GPU.
 
-Faster R-CNN achieves \textbf{59.34\% mAP}. Mask R-CNN achieves \textbf{59.62\% mAP} on detection (box mAP only; mask mAP is evaluated qualitatively since VOC 2007 test has no public segmentation annotations) and additionally produces per-instance binary masks.
+Faster R-CNN achieves \textbf{59.34\% mAP}. Mask R-CNN achieves \textbf{59.62\% mAP} on bounding-box detection and \textbf{55.02\% mask mIoU} on the VOC 2007 segmentation test split (210 images), and additionally produces per-instance binary masks.
 
 % -----------------------------------------------------------------------
 \section{Implementation}
@@ -35,7 +35,7 @@ Pretrained VGG16, all conv layers up to (but not including) the final max pool (
 9 anchors per feature map location: scales $\{128, 256, 512\}$ $\times$ aspect ratios $\{0.5, 1.0, 2.0\}$. A base anchor at scale $s$ and ratio $r$ has $w = s/\sqrt{r}$, $h = s\sqrt{r}$, centered on the grid cell. These are shifted across all locations using stride $= \lfloor H_\text{img} / H_\text{feat} \rfloor$. For a $600\times800$ input the feature map is roughly $38\times50$, giving about 17,100 anchors.
 
 \paragraph{RPN head.}
-A shared $3\times3$ conv (512 channels), then a $1\times1$ classification conv outputting one objectness logit per anchor ($K$ logits per location total) and a $1\times1$ regression conv outputting $4K$ box deltas. Each anchor is treated as a binary foreground/background problem and trained with \texttt{BCEWithLogitsLoss}---not $2K$ softmax scores. Weights initialized from $\mathcal{N}(0, 0.01)$, biases to zero.
+A shared $3\times3$ conv (512 channels), then a $1\times1$ classification conv outputting one objectness logit per anchor ($K$ logits per location total) and a $1\times1$ regression conv outputting $4K$ box deltas. Each anchor is treated as a binary foreground/background problem and trained with \texttt{BCEWithLogitsLoss} (not $2K$ softmax scores). Weights initialized from $\mathcal{N}(0, 0.01)$, biases to zero.
 
 \paragraph{Anchor assignment.}
 Positive if IoU $\geq 0.7$ with any GT box, negative if IoU $< 0.3$, ignored otherwise. The anchor with the highest IoU per GT box is forced positive regardless of threshold, to guarantee coverage. 256 anchors sampled at 1:1 positive/negative ratio.
@@ -160,7 +160,7 @@ The pattern makes sense. Cat (76.43\%), dog (72.33\%), and horse (71.82\%) are l
 
 \subsection{Detection Examples}
 
-Figure~\ref{fig:detections} shows two test images with GT boxes (green) and predictions (red). The horse image is a good case: high-confidence detections across two classes, boxes tightly fit. The indoor scene is harder---person, sofa, and multiple chairs overlapping---but the model gets them all.
+Figure~\ref{fig:detections} shows two test images with GT boxes (green) and predictions (red). The horse image is a good case: high-confidence detections across two classes, boxes tightly fit. The indoor scene is harder (person, sofa, and multiple chairs overlapping) but the model gets them all.
 
 \begin{figure}[H]
     \centering
@@ -171,7 +171,7 @@ Figure~\ref{fig:detections} shows two test images with GT boxes (green) and pred
     \hfill
     \begin{subfigure}[t]{0.235\textwidth}
         \includegraphics[width=\textwidth]{figures/samples/det_pred_5.jpg}
-        \caption{Pred: horse 1.00, person 0.99/0.97}
+        \caption{Pred: horse, person}
     \end{subfigure}
     \hfill
     \begin{subfigure}[t]{0.235\textwidth}
@@ -229,7 +229,7 @@ VOC 2007 has instance segmentation masks for 632 images in \texttt{SegmentationO
 
 \subsection{Training}
 
-Same hyperparameters as Faster R-CNN. The mask loss started at 0.0260 and converged to 0.0109 by epoch 19.
+Same hyperparameters as Faster R-CNN. The mask loss started at 0.0580 and converged to 0.0371 by epoch 19.
 
 \begin{figure}[H]
     \centering
@@ -251,7 +251,14 @@ Mask R-CNN (ours)    & 59.62\% & VGG16 \\
 \caption{Detection mAP on VOC 2007 test. Adding the mask branch doesn't hurt detection.}
 \end{table}
 
-Mask mIoU on the test set cannot be computed because the VOC 2007 test release does not include segmentation annotations---the \texttt{SegmentationObject/} directory is only present in the trainval download. The mask loss convergence (0.0260 $\to$ 0.0109 over 20 epochs) and the qualitative results in Figure~\ref{fig:masks} serve as the evaluation proxy for the mask branch.
+Mask mIoU is evaluated on the 210 VOC 2007 segmentation test images using the \texttt{SegmentationObject} PNG ground truth. Each predicted 28$\times$28 mask is resized to the detected bounding box and placed back at full image resolution; IoU is computed against the corresponding GT instance mask. With a box IoU matching threshold of 0.5, 382 of 607 GT instances are matched, giving \textbf{55.02\% mask mIoU}. Figure~\ref{fig:mask_per_class_ap} shows the bounding-box per-class AP breakdown, which mirrors Faster R-CNN closely as expected.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\textwidth]{figures/mask_per_class_ap.png}
+    \caption{Mask R-CNN per-class AP on VOC 2007 test set. The same hard classes (bottle, pottedplant, chair) remain at the bottom.}
+    \label{fig:mask_per_class_ap}
+\end{figure}
 
 \subsection{Instance Segmentation Examples}
 
@@ -266,7 +273,7 @@ Predicted masks are $28\times28$ crops pasted back into the detected bounding bo
     \hfill
     \begin{subfigure}[t]{0.235\textwidth}
         \includegraphics[width=\textwidth]{figures/samples/mask_pred_1.jpg}
-        \caption{Pred: cat 1.00 + mask}
+        \caption{Pred: cat + mask}
     \end{subfigure}
     \hfill
     \begin{subfigure}[t]{0.235\textwidth}
@@ -276,7 +283,7 @@ Predicted masks are $28\times28$ crops pasted back into the detected bounding bo
     \hfill
     \begin{subfigure}[t]{0.235\textwidth}
         \includegraphics[width=\textwidth]{figures/samples/mask_pred_7.jpg}
-        \caption{Pred: dog 0.97/0.98 + masks}
+        \caption{Pred: dog, dog + masks}
     \end{subfigure}
     \caption{Instance segmentation results. Colored overlays show the predicted binary masks.}
     \label{fig:masks}
@@ -292,7 +299,7 @@ The stride has to be computed from the actual image/feature-map size ratio each 
 I ran into degenerate-box issues until I realized clamping proposals to the image boundary can itself create zero-width boxes. Degenerate removal has to happen after clamping.
 
 \paragraph{Class-specific regression.}
-The detection head predicts $21\times4$ deltas. At training only the GT class deltas are supervised; at inference only the top-scoring class deltas are decoded. Getting the index slicing right---\texttt{box\_preds[range(N), labels]}---took more debugging than I expected.
+The detection head predicts $21\times4$ deltas. At training only the GT class deltas are supervised; at inference only the top-scoring class deltas are decoded. Getting the index slicing right (\texttt{box\_preds[range(N), labels]}) took more debugging than I expected.
 
 \paragraph{Mask target generation.}
 To get $28\times28$ GT masks aligned with each proposal, I crop the full-resolution GT mask to the GT bounding box and resize using RoI Align at spatial scale 1.0. Plain bilinear resize doesn't respect the box boundary the same way.
@@ -306,7 +313,7 @@ Final training ran on Colab CUDA. The code also supports Apple MPS as a fallback
 % -----------------------------------------------------------------------
 \section{Conclusion}
 
-Both models were implemented from scratch and trained on VOC 2007. Faster R-CNN hits 59.34\% mAP, which is reasonable for a VGG16 single-scale model. Mask R-CNN matches that at 59.62\% mAP and adds instance segmentation. Closing the gap to the $\sim$70\% torchvision reference would mostly come from switching to a ResNet-50 + FPN backbone, not from changes to the training procedure.
+Both models were implemented from scratch and trained on VOC 2007. Faster R-CNN hits 59.34\% mAP, which is reasonable for a VGG16 single-scale model. Mask R-CNN matches that at 59.62\% mAP and adds instance segmentation at 55.02\% mask mIoU. Closing the gap to the $\sim$70\% torchvision reference would mostly come from switching to a ResNet-50 + FPN backbone, not from changes to the training procedure.
 
 
 \end{document}
