@@ -240,15 +240,15 @@ Same hyperparameters as Faster R-CNN. The mask loss started at 0.0580 and conver
 
 \begin{table}[H]
 \centering
-\begin{tabular}{lcc}
+\begin{tabular}{lccc}
 \toprule
-\textbf{Model} & \textbf{Detection mAP} & \textbf{Backbone} \\
+\textbf{Model} & \textbf{Detection mAP} & \textbf{Mask mIoU} & \textbf{Backbone} \\
 \midrule
-Faster R-CNN (ours)  & 59.34\% & VGG16 \\
-Mask R-CNN (ours)    & 59.62\% & VGG16 \\
+Faster R-CNN (ours)  & 59.34\% & ---     & VGG16 \\
+Mask R-CNN (ours)    & 59.62\% & 55.02\% & VGG16 \\
 \bottomrule
 \end{tabular}
-\caption{Detection mAP on VOC 2007 test. Adding the mask branch doesn't hurt detection.}
+\caption{Results on VOC 2007 test. Mask mIoU evaluated on the 210-image segmentation split. Adding the mask branch doesn't hurt detection.}
 \end{table}
 
 Mask mIoU is evaluated on the 210 VOC 2007 segmentation test images using the \texttt{SegmentationObject} PNG ground truth. Each predicted 28$\times$28 mask is resized to the detected bounding box and placed back at full image resolution; IoU is computed against the corresponding GT instance mask. With a box IoU matching threshold of 0.5, 382 of 607 GT instances are matched, giving \textbf{55.02\% mask mIoU}. Figure~\ref{fig:mask_per_class_ap} shows the bounding-box per-class AP breakdown, which mirrors Faster R-CNN closely as expected.
