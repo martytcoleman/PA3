@@ -256,10 +256,12 @@ class MaskRCNN(FasterRCNN):
 
         if target is not None:
             image, target['bboxes'] = self.normalize_resize_image_and_boxes(image, target['bboxes'])
-            # scale masks if present
             if 'masks' in target and target['masks'] is not None:
-                # masks stay at full image resolution - we resize them lazily
-                pass
+                target['masks'] = F.interpolate(
+                    target['masks'].unsqueeze(0).float(),
+                    size=image.shape[-2:],
+                    mode='nearest',
+                ).squeeze(0)
         else:
             image, _ = self.normalize_resize_image_and_boxes(image)
 
